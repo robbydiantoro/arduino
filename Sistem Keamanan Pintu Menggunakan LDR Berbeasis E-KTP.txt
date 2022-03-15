@@ -1,0 +1,275 @@
+/* PINOUT:
+RC522 MODULE    Uno/Nano     MEGA
+SDA             D10          D9
+SCK             D13          D52
+MOSI            D11          D51
+MISO            D12          D50
+IRQ             N/A          N/A
+GND             GND          GND
+RST             D9           D8
+3.3V            3.3V         3.3V
+*/
+#include <Wire.h>  // i2C Conection Library
+#include <LiquidCrystal_I2C.h>  //Memanggil i2C LCD Library
+#include <Password.h> 
+#include <Keypad.h> 
+#include <SPI.h>
+#include <RFID.h>
+
+#define SDA_PIN 9 //Pin SDA RFID
+#define RST_PIN 8 //Pin RST RFID
+#define saklarsentuh 27 //Pin Saklar Sentuh
+#define buzzer 22 //Passive buzzer ke Pin D10 dan GND
+#define doorLock  26 //Driver Selenoid Door Lock/Relay input ke pin D12
+
+RFID rfid(SDA_PIN,RST_PIN); // Definisi modul RFID MRFC522
+int serNum[5];          //Variable buffer Scan Card
+int cards[][5] = {      //ID Kartu yang diperbolehkan masuk
+  {141,125,2,197,55},   {141,125,2,197,55},  {141,125,2,197,55}, 
+  {116,62,241,29,166},  {141,125,2,197,55},  {141,125,2,197,55},
+  {136,4,19,52,171},    {141,125,2,197,55},  {141,125,2,197,55},
+  {150,3,20,40,171},    {141,125,2,197,55},  {141,125,2,197,55},
+  {136,4,19,52,171},    {141,125,2,197,55},  {141,125,2,197,55},
+  {136,4,19,52,171},    {141,125,2,197,55},  {141,125,2,197,55},
+  {136,4,19,52,171},    {141,125,2,197,55},  {141,125,2,197,55},
+  {136,4,19,52,171},    {141,125,2,197,55},  {141,125,2,197,55},
+  {136,4,19,52,171},    {141,125,2,197,55},  {141,125,2,197,55},
+  {136,4,19,52,171},    {141,125,2,197,55},  {141,125,2,197,55},
+
+ {116,62,241,29,166},   {150,3,20,40,171},   {151,22,33,56,171},
+ {116,62,241,29,166},   {150,3,20,40,171},   {151,22,33,56,171},
+ {116,62,241,29,166},   {150,3,20,40,171},   {151,22,33,56,171},
+ {116,62,241,29,166},   {150,3,20,40,171},   {151,22,33,56,171},
+ {116,62,241,29,166},   {150,3,20,40,171},   {151,22,33,56,171},
+ {116,62,241,29,166},   {150,3,20,40,171},   {151,22,33,56,171},
+ {116,62,241,29,166},   {150,3,20,40,171},   {151,22,33,56,171},
+ {116,62,241,29,166},   {150,3,20,40,171},   {151,22,33,56,171},
+ {116,62,241,29,166},   {150,3,20,40,171},   {151,22,33,56,171},
+ {116,62,241,29,166},   {150,3,20,40,171},   {151,22,33,56,171}
+};
+
+bool access = false;
+
+LiquidCrystal_I2C lcd(0x27, 20, 4); // Definisi modul LCD 20x4
+Password password = Password("12AB"); //<-- TULIS PASSWORD SISTEM ANDA DISINI
+const byte ROWS = 4; // Jumlah baris 4 baris
+const byte COLS = 4; // Jumlah kolom 3 kolom
+// Deinisi key map
+char keys[ROWS][COLS] = {
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
+};
+
+byte rowPins[ROWS] = { 11,10,7,6 };//koneksi baris ke pin Arduino
+byte colPins[COLS] = { 5,4,3,2 };//koneksi kolom ke pin Arduino
+
+Keypad keypad = Keypad( makeKeymap(keys), rowPins, colPins, ROWS, COLS ); // Definisi Modul Keypad
+
+int alarm = 0; //Definisi alarm
+uint8_t alarmStat = 0;
+uint8_t maxError = 5;
+
+unsigned long previousMillis = 0; 
+const long interval = 1000;  
+uint8_t pwMode=0;
+uint8_t pwPos=0;
+
+void setup(){
+    Serial.begin(9600); //untuk menampilkan di serial monitor
+    lcd.begin(); // Inisialisasi modul LCD
+    SPI.begin(); // Inisialisasi SPI untuk modul RFID
+    rfid.init(); // Inisialisasi modul RFID
+    keypad.addEventListener(keypadEvent); //add an event listener for this keypad
+    pinMode(saklarsentuh,INPUT); // Mendeklarasi pin Sensor sebagai input
+    pinMode(doorLock, OUTPUT); // Mendeklarasi pin Selenoid sebagai output
+    digitalWrite(doorLock, HIGH); //kondisi awal tertutup
+
+  tone (buzzer,1200); // pengatur bunyi buzzer
+  lcd.setCursor (3,0); // kursor pada kolom 4
+  lcd.print("Robby Diantoro"); // Tampilkan pesan ke LCD
+  lcd.setCursor (3,2); // kursor pada kolom 3 baris 2
+  lcd.print("Teknik Komputer"); // Tampilksn pesan LCD
+  delay (2000); // Tunda 2 detik
+  lcd.clear(); // Menghapus tampilan LCD
+  noTone (buzzer); // Buzzer tidak bunyi
+}
+
+void loop(){ // Program utama pengulangan
+touch(); // Definisi touch
+  keypad.getKey();  //Reading Keypad
+
+  if (alarm >= maxError){
+    alarmStat = 1;    }
+  
+  if (alarmStat == 0 && pwMode == 0){
+  lcd.setCursor (5,0);
+  lcd.print("-WELCOME-"); // Tampilkan pesan LCD
+  unsigned long currentMillis = millis();
+
+//Membuat perubahan tulisan pada LCD tanpa menggunakan delay
+//Pada sistem stanby sama sekali tidak boleh ada delay untuk menghindari Keypad NGADAT
+ 
+  lcd.setCursor (1,2);
+  lcd.print("Tap Kartu Atau Pin");
+
+    if(rfid.isCard()){
+    
+        if(rfid.readCardSerial()){
+            Serial.print(rfid.serNum[0]);
+            Serial.print(" ");
+            Serial.print(rfid.serNum[1]);
+            Serial.print(" ");
+            Serial.print(rfid.serNum[2]);
+            Serial.print(" ");
+            Serial.print(rfid.serNum[3]);
+            Serial.print(" ");
+            Serial.print(rfid.serNum[4]);
+            Serial.println("");
+            
+            for(int x = 0; x < sizeof(cards); x++){
+              for(int i = 0; i < sizeof(rfid.serNum); i++ ){
+                  if(rfid.serNum[i] != cards[x][i]) {
+                      access = false;
+                      break;
+                  } else {
+                      access = true;
+                  }
+              }
+              if(access) break;
+            }   
+        }
+        
+       if(access){
+          lcd.clear();
+          Serial.println("Welcome!");
+          lcd.setCursor (3,0);
+          lcd.print("Akses diterima");
+          lcd.setCursor (2,2);
+          lcd.print("ID:");
+          lcd.print(rfid.serNum[0]); lcd.print(rfid.serNum[1]);
+          lcd.print(rfid.serNum[2]); lcd.print(rfid.serNum[3]);
+          lcd.print(rfid.serNum[4]);
+          ACCEPT ();
+           } 
+      
+      else {
+           lcd.clear();
+           alarm = alarm+1;
+           Serial.println("Not allowed!"); 
+           lcd.setCursor (3,0);
+           lcd.print("Akses ditolak");
+           lcd.setCursor (1,2);
+           lcd.print("ID:");
+           lcd.print(rfid.serNum[0]); lcd.print(rfid.serNum[1]);
+           lcd.print(rfid.serNum[2]); lcd.print(rfid.serNum[3]);
+           lcd.print(rfid.serNum[4]);
+           RIJECT ();   
+       }        
+    }
+
+    rfid.halt();
+}
+if (alarmStat == 1) {
+  lcd.setCursor (0,0);
+  lcd.print("-System LOCKED-");
+  lcd.setCursor (0,1);
+  lcd.print("Please Wait");
+  for(int i=5; i>0; i--){
+  tone (buzzer,1800);
+  lcd.setCursor (13,1); lcd.print(i);
+  lcd.print(F("  "));delay (1000);}
+  noTone (buzzer);
+  alarmStat = 0;
+  alarm = 0;
+  lcd.clear();
+  }
+}
+
+void keypadEvent(KeypadEvent eKey){
+  switch (keypad.getState()){
+  case PRESSED:
+  Serial.print("Pressed: ");
+  Serial.println(eKey);
+  
+  pwMode =1;
+  pwPos=pwPos+1;
+  if(pwPos==1){lcd.clear();}
+  lcd.setCursor (0,0);
+  lcd.print("Masukkan Password");
+  if(pwPos<5){lcd.setCursor (5+pwPos,1);
+  lcd.print("*");}
+  
+  switch (eKey){
+    case '*': checkPassword(); break;
+    //case '#': password.reset(); break;
+    
+    default: password.append(eKey);
+     }
+  }
+}
+
+void checkPassword(){
+  if (password.evaluate()){
+
+    Serial.println("Password Oke");
+    lcd.setCursor (2,1);
+    lcd.print("-Password Benar-");
+    ACCEPT ();
+    password.reset();
+    pwPos=0;
+    //Add code to run if it works
+    
+  }else{
+    Serial.println("Password SALAH");
+    lcd.setCursor (2,1);
+    lcd.print("-Password Salah-");
+    alarm = alarm+1;
+    RIJECT ();
+    password.reset();
+    pwPos=0;
+    //add code to run if it did not work
+  } 
+}
+
+void ACCEPT () {
+           digitalWrite(doorLock, LOW); // pintu terbuka
+           delay(600);
+           lcd.clear();
+           lcd.setCursor (0,0);
+           lcd.print("Silahkan Masuk");
+           lcd.setCursor (0,1);
+           lcd.print("AutoLock after");
+           for(int i=5; i>0; i--){
+            lcd.setCursor (15,1); lcd.print(i);
+            delay (1000);
+           }
+           digitalWrite(doorLock, HIGH); //setelah 5 detik pintu akan tertutup
+           pwMode =0;
+           lcd.clear();
+           }
+
+void RIJECT () {
+           tone (buzzer,900);
+           delay(200);
+           noTone(buzzer);
+           delay(200);
+           tone (buzzer,900);
+           delay(200);
+           noTone (buzzer);  
+           delay(500);
+           pwMode =0;
+           lcd.clear();  
+}
+
+void touch() {
+  int value = digitalRead(saklarsentuh);
+  if (value){ 
+    digitalWrite(doorLock, LOW);
+    delay(5000);
+    } 
+    else { 
+      digitalWrite(doorLock, HIGH);
+      }
+}

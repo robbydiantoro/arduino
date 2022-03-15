@@ -1,0 +1,39 @@
+int Led = 10;
+
+int LDR = A5; 
+
+
+void setup()
+
+{
+
+  pinMode(Led, OUTPUT); 
+
+}
+
+
+void loop()
+
+{
+
+  int cahaya = analogRead(LDR); 
+
+  //jika nilai ADC > 800 maka
+
+  if (cahaya > 800)
+
+  {
+
+   digitalWrite(Led, HIGH); 
+
+  }
+
+  else //atau
+
+  {
+
+   digitalWrite(Led, LOW); 
+
+  }
+
+}
